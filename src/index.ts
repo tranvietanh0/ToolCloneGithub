@@ -96,7 +96,7 @@ async function main(args: string[]) {
 
   const cloneWithProgress = async (repo: typeof repos[0]): Promise<CloneResult> => {
     try {
-      await githubClient.createRepoIfNotExists(repo.name, repo.private);
+      await githubClient.createRepoIfNotExists(repo.name, true);
       const result = await gitOps.cloneAndPush(repo, tempDir.getPath());
       completed++;
       logger.progress(`Progress: ${completed}/${repos.length}`);
