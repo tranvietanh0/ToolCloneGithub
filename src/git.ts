@@ -5,6 +5,7 @@ import type { RepoInfo, CloneResult } from './types.js';
 export class GitOperations {
   private token: string;
   private targetUsername: string;
+  private maxRetries: number = 2;
 
   constructor(token: string, targetUsername: string) {
     this.token = token;
@@ -22,42 +23,68 @@ export class GitOperations {
     return `https://x-access-token:${this.token}@github.com/${this.targetUsername}/${repoName}.git`;
   }
 
+  private formatSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
   async cloneAndPush(repo: RepoInfo, tempDir: string): Promise<CloneResult> {
     const startTime = Date.now();
     const result: CloneResult = { repo: repo.name, success: false };
 
-    try {
-      logger.progress(`Cloning ${repo.name}...`);
+    logger.progress(`Cloning ${repo.name} (${this.formatSize(repo.size * 1024)})...`);
 
-      const git: SimpleGit = simpleGit();
-      const authCloneUrl = this.getAuthCloneUrl(repo.cloneUrl);
-      const mirrorPath = `${tempDir}/${repo.name}.git`;
+    const git: SimpleGit = simpleGit();
+    const authCloneUrl = this.getAuthCloneUrl(repo.cloneUrl);
+    const mirrorPath = `${tempDir}/${repo.name}.git`;
 
-      await git.clone(authCloneUrl, mirrorPath, ['--mirror']);
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          logger.progress(`Retry ${attempt}/${this.maxRetries} for ${repo.name}...`);
+        }
 
-      logger.progress(`Pushing ${repo.name} to ${this.targetUsername}...`);
+        await git.clone(authCloneUrl, mirrorPath, ['--mirror']);
 
-      const pushGit: SimpleGit = simpleGit(mirrorPath);
-      const targetUrl = this.getTargetAuthUrl(repo.name);
+        logger.progress(`Pushing ${repo.name} to ${this.targetUsername}...`);
 
-      await pushGit.push(targetUrl, '--all', ['--mirror']);
+        const pushGit: SimpleGit = simpleGit(mirrorPath);
+        const targetUrl = this.getTargetAuthUrl(repo.name);
 
-      const duration = Date.now() - startTime;
-      result.success = true;
-      result.duration = duration;
+        await pushGit.push(targetUrl, '--all', ['--mirror']);
 
-      logger.success(`✓ ${repo.name} (${(duration / 1000).toFixed(1)}s)`);
+        const duration = Date.now() - startTime;
+        result.success = true;
+        result.duration = duration;
 
-      return result;
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      result.success = false;
-      result.duration = duration;
-      result.error = error instanceof Error ? error.message : String(error);
+        logger.success(`✓ ${repo.name} (${(duration / 1000).toFixed(1)}s)`);
 
-      logger.error(`✗ ${repo.name}: ${result.error}`);
+        return result;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        
+        if (attempt === this.maxRetries) {
+          const duration = Date.now() - startTime;
+          result.success = false;
+          result.duration = duration;
+          result.error = errorMsg;
 
-      return result;
+          logger.error(`✗ ${repo.name}: ${errorMsg}`);
+          return result;
+        }
+
+        logger.warn(`⚠ ${repo.name}: ${errorMsg} - retrying...`);
+        
+        try {
+          const fs = await import('fs');
+          if (fs.existsSync(mirrorPath)) {
+            fs.rmSync(mirrorPath, { recursive: true, force: true });
+          }
+        } catch {}
+      }
     }
+
+    return result;
   }
 }
