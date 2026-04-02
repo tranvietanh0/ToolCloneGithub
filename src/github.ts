@@ -5,10 +5,20 @@ import { logger } from './logger.js';
 export class GitHubClient {
   private octokit: Octokit;
   private org: string;
+  private username: string;
 
   constructor(token: string, org: string) {
     this.octokit = new Octokit({ auth: token });
     this.org = org;
+    this.username = '';
+  }
+
+  async getUsername(): Promise<string> {
+    if (!this.username) {
+      const { data } = await this.octokit.users.getAuthenticated();
+      this.username = data.login;
+    }
+    return this.username;
   }
 
   async listOrgRepos(options: { includePrivate?: boolean; includePublic?: boolean } = {}): Promise<RepoInfo[]> {
@@ -72,5 +82,30 @@ export class GitHubClient {
       limit: data.rate.limit,
       reset: new Date(data.rate.reset * 1000),
     };
+  }
+
+  async createRepoIfNotExists(repoName: string, isPrivate: boolean): Promise<boolean> {
+    const username = await this.getUsername();
+    
+    try {
+      await this.octokit.repos.get({
+        owner: username,
+        repo: repoName,
+      });
+      logger.info(`Repo ${repoName} already exists, skipping creation`);
+      return false;
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
+        logger.progress(`Creating repo: ${repoName}`);
+        await this.octokit.repos.createForAuthenticatedUser({
+          name: repoName,
+          private: isPrivate,
+          auto_init: false,
+        });
+        logger.success(`Created repo: ${repoName}`);
+        return true;
+      }
+      throw error;
+    }
   }
 }

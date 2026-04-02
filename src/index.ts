@@ -95,10 +95,21 @@ async function main(args: string[]) {
   let completed = 0;
 
   const cloneWithProgress = async (repo: typeof repos[0]): Promise<CloneResult> => {
-    const result = await gitOps.cloneAndPush(repo, tempDir.getPath());
-    completed++;
-    logger.progress(`Progress: ${completed}/${repos.length}`);
-    return result;
+    try {
+      await githubClient.createRepoIfNotExists(repo.name, repo.private);
+      const result = await gitOps.cloneAndPush(repo, tempDir.getPath());
+      completed++;
+      logger.progress(`Progress: ${completed}/${repos.length}`);
+      return result;
+    } catch (error) {
+      completed++;
+      logger.progress(`Progress: ${completed}/${repos.length}`);
+      return {
+        repo: repo.name,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   };
 
   try {
